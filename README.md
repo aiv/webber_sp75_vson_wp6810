@@ -13,6 +13,8 @@ Through packet capture and protocol analysis, I've documented the complete BLE c
 - **BLE Protocol Implementation**: Full reverse-engineered protocol documentation
 - **Device Discovery**: Quick scanning tool to find your sensors
 - **Real-time Monitoring**: Stream air quality data (PM1, PM2.5, PM10, particle count)
+- **Automatic Reconnection**: Detects device timeouts and reconnects automatically
+- **Configurable Timeout**: Adjustable response timeout (default: 5 minutes)
 - **Home Assistant Integration**: Automatic MQTT discovery for seamless integration
 - **Flexible Output**: Console, JSON, or MQTT publishing
 - **Battery Monitoring**: Reports device battery level
@@ -134,6 +136,10 @@ Output Options:
 --output {text,json}            Output format (default: text)
 --include-history               Include historical records in output (default: only current)
 
+Connection Options:
+--timeout SECONDS               Device response timeout in seconds (default: 300 = 5 minutes)
+                               If no data is received within this time, reconnection will be attempted
+
 MQTT Options:
 --mqtt                          Enable MQTT publishing
 --mqtt-host HOST                MQTT broker hostname/IP (default: localhost)
@@ -203,6 +209,14 @@ This includes:
 - Move closer to the device
 - Reduce interference from other Bluetooth/WiFi devices
 - Check device battery level
+- The monitor will automatically attempt to reconnect after connection loss
+
+### Device Stops Responding
+
+If your device occasionally stops sending data:
+- The monitor automatically detects timeouts (default: 5 minutes)
+- Automatic reconnection attempts will be made every 5 seconds
+- Adjust timeout with `--timeout SECONDS` if needed (e.g., `--timeout 120` for 2 minutes)
 
 ## Limitations
 

@@ -13,10 +13,12 @@ Usage:
     ./vson-monitor.py --device 20:C3:8F:DA:96:DE --output json
     ./vson-monitor.py --device 20:C3:8F:DA:96:DE --mqtt --mqtt-host localhost
     ./vson-monitor.py --device 20:C3:8F:DA:96:DE --mqtt --mqtt-auto-home-assistant
+    ./vson-monitor.py --device 20:C3:8F:DA:96:DE --timeout 600
 
 Arguments:
     --device MAC            BLE device MAC address (required)
     --output FORMAT         Output format: text (default) or json
+    --timeout SECONDS       Response timeout in seconds (default: 300 = 5 minutes)
     --mqtt                  Enable MQTT publishing
     --mqtt-host HOST        MQTT broker host (default: localhost)
     --mqtt-port PORT        MQTT broker port (default: 1883)
@@ -36,6 +38,7 @@ import json
 import sys
 import random
 import re
+import time
 from datetime import datetime
 from typing import Optional, Dict, Any, Tuple
 from bleak import BleakClient
@@ -116,6 +119,7 @@ class Config:
         self.mqtt_connection_failed_count: int = 0
         self.mqtt_max_connection_attempts: int = 5
         self.mqtt_fatal_error: bool = False
+        self.response_timeout: int = 300  # 5 minutes in seconds
 
 
 class SensorState:
@@ -123,6 +127,7 @@ class SensorState:
 
     def __init__(self):
         self.latest_battery: int = 0
+        self.last_data_time: Optional[float] = None
 
 
 config = Config()
@@ -620,6 +625,9 @@ def notification_handler(ch, data: bytearray) -> None:
         "Notification: handle=0x%04x, uuid=%s, bytes=%s", handle, uuid, hex_str(b)
     )
 
+    # Update last data time for any notification
+    sensor_state.last_data_time = time.time()
+
     # DATA: main air quality measurements
     if uuid_lower == UUID_DATA.lower():
         decoded = decode_data_frame(b)
@@ -840,8 +848,8 @@ async def initialize_device(client: BleakClient) -> None:
 # ==== Main Application ====
 
 
-async def monitor_device() -> None:
-    """Main monitoring loop - connect to device and process notifications."""
+async def monitor_device_connection() -> None:
+    """Single connection attempt - connect to device and process notifications."""
     # Check for MQTT fatal error before attempting BLE connection
     if config.mqtt_fatal_error:
         logging.error("Aborting due to MQTT connection failure")
@@ -870,13 +878,29 @@ async def monitor_device() -> None:
                 publish_home_assistant_discovery(config.device_address)
 
             # Listen for notifications
-            logging.info("Listening for sensor data...")
+            logging.info("Listening for sensor data (timeout: %d seconds)...", config.response_timeout)
+
+            # Initialize last data time
+            sensor_state.last_data_time = time.time()
 
             while True:
                 # Check for MQTT fatal error during monitoring
                 if config.mqtt_fatal_error:
                     logging.error("MQTT connection lost, stopping monitoring")
                     break
+
+                # Check for response timeout
+                if sensor_state.last_data_time is not None:
+                    time_since_last_data = time.time() - sensor_state.last_data_time
+                    if time_since_last_data > config.response_timeout:
+                        logging.warning(
+                            "No response from device for %.0f seconds (timeout: %d seconds). Reconnecting...",
+                            time_since_last_data,
+                            config.response_timeout
+                        )
+                        # Break out of the loop to trigger reconnection
+                        break
+
                 await asyncio.sleep(1)
 
     except asyncio.CancelledError:
@@ -924,11 +948,35 @@ async def monitor_device() -> None:
             # Generic BLE error
             logging.error("BLE error: %s", e)
 
-        # Don't raise - just exit cleanly
-        sys.exit(1)
-    except (OSError, RuntimeError, ValueError) as e:
-        logging.error("Unexpected error: %s", e, exc_info=config.debug)
+        # Raise to trigger reconnection attempt
         raise
+
+
+async def monitor_device() -> None:
+    """Main monitoring loop with automatic reconnection on timeout or errors."""
+    retry_delay = 5  # seconds between reconnection attempts
+    
+    while True:
+        try:
+            await monitor_device_connection()
+            # If we exit normally (timeout detected), try to reconnect
+            logging.info("Attempting to reconnect in %d seconds...", retry_delay)
+            await asyncio.sleep(retry_delay)
+        except KeyboardInterrupt:
+            logging.info("Interrupted by user, shutting down...")
+            raise
+        except asyncio.CancelledError:
+            logging.debug("Monitoring cancelled")
+            raise
+        except BleakError as e:
+            # Connection errors - attempt to reconnect
+            logging.warning("Connection lost: %s", e)
+            logging.info("Attempting to reconnect in %d seconds...", retry_delay)
+            await asyncio.sleep(retry_delay)
+        except (OSError, RuntimeError, ValueError) as e:
+            logging.error("Unexpected error: %s", e, exc_info=config.debug)
+            logging.info("Attempting to reconnect in %d seconds...", retry_delay)
+            await asyncio.sleep(retry_delay)
 
 
 def parse_arguments():
@@ -1036,11 +1084,23 @@ Output format:
         help="File log level (default: INFO)",
     )
 
+    parser.add_argument(
+        "--timeout",
+        type=int,
+        default=300,
+        metavar="SECONDS",
+        help="Device response timeout in seconds (default: 300 = 5 minutes). "
+             "If no data is received within this time, reconnection will be attempted.",
+    )
+
     args = parser.parse_args()
 
     # Validation
     if args.mqtt_auto_home_assistant and not args.mqtt:
         parser.error("--mqtt-auto-home-assistant requires --mqtt")
+    
+    if args.timeout < 1:
+        parser.error("--timeout must be at least 1 second")
 
     # Validate MAC address format
     mac_pattern = re.compile(r"^([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}$")
@@ -1077,6 +1137,7 @@ async def main():
     config.debug = args.debug
     config.log_file = args.log
     config.log_level = args.log_level
+    config.response_timeout = args.timeout
 
     # Setup logging
     setup_logging()
@@ -1090,11 +1151,6 @@ async def main():
         await monitor_device()
     except (KeyboardInterrupt, asyncio.CancelledError):
         logging.info("Interrupted by user, shutting down...")
-    except BleakError:
-        # BLE errors are already handled in monitor_device(), don't duplicate
-        pass
-    except (OSError, RuntimeError, ValueError) as e:
-        logging.error("Unexpected error: %s", e, exc_info=config.debug)
     finally:
         if config.mqtt_client:
             config.mqtt_client.loop_stop()
