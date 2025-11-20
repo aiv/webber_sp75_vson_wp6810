@@ -559,7 +559,7 @@ def decode_meta_time_mode(payload: bytes) -> Optional[Dict[str, int]]:
 def output_text_data(decoded: Dict[str, Any]) -> None:
     """Format and print DATA frame in human-readable text format."""
     logging.info(
-        "PM1: %4d µg/m³  PM2.5: %4d µg/m³  PM10: %4d µg/m³  " "Particles: %8.2f  [%s]",
+        "PM1: %4d µg/m³  PM2.5: %4d µg/m³  PM10: %4d µg/m³  Particles: %8.2f  [%s]",
         decoded["pm1"],
         decoded["pm25"],
         decoded["pm10"],
@@ -909,6 +909,9 @@ async def monitor_device_connection() -> None:
     except KeyboardInterrupt:
         logging.debug("Keyboard interrupt received")
         raise
+    except asyncio.TimeoutError:
+        logging.error("BLE connection timeout - device did not respond")
+        raise
     except BleakError as e:
         error_msg = str(e).lower()
 
@@ -968,8 +971,11 @@ async def monitor_device() -> None:
         except asyncio.CancelledError:
             logging.debug("Monitoring cancelled")
             raise
+        except asyncio.TimeoutError:
+            logging.warning("Connection timeout")
+            logging.info("Attempting to reconnect in %d seconds...", retry_delay)
+            await asyncio.sleep(retry_delay)
         except BleakError as e:
-            # Connection errors - attempt to reconnect
             logging.warning("Connection lost: %s", e)
             logging.info("Attempting to reconnect in %d seconds...", retry_delay)
             await asyncio.sleep(retry_delay)
