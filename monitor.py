@@ -247,8 +247,6 @@ def setup_mqtt() -> Optional[mqtt.Client]:
         client.loop_start()
 
         # Wait up to 15 seconds for initial connection or fatal error
-        import time
-
         max_wait = 15
         waited = 0
         while waited < max_wait:
@@ -775,7 +773,7 @@ def build_time_sync() -> Tuple[bytes, datetime]:
     """
     now = datetime.now()
     year_offset = now.year - 2000
-    if not (0 <= year_offset <= 255):
+    if not 0 <= year_offset <= 255:
         year_offset = 0
 
     time_bytes = bytes(
@@ -878,7 +876,10 @@ async def monitor_device_connection() -> None:
                 publish_home_assistant_discovery(config.device_address)
 
             # Listen for notifications
-            logging.info("Listening for sensor data (timeout: %d seconds)...", config.response_timeout)
+            logging.info(
+                "Listening for sensor data (timeout: %d seconds)...",
+                config.response_timeout,
+            )
 
             # Initialize last data time
             sensor_state.last_data_time = time.time()
@@ -896,7 +897,7 @@ async def monitor_device_connection() -> None:
                         logging.warning(
                             "No response from device for %.0f seconds (timeout: %d seconds). Reconnecting...",
                             time_since_last_data,
-                            config.response_timeout
+                            config.response_timeout,
                         )
                         # Break out of the loop to trigger reconnection
                         break
@@ -958,7 +959,7 @@ async def monitor_device_connection() -> None:
 async def monitor_device() -> None:
     """Main monitoring loop with automatic reconnection on timeout or errors."""
     retry_delay = 5  # seconds between reconnection attempts
-    
+
     while True:
         try:
             await monitor_device_connection()
@@ -1096,7 +1097,7 @@ Output format:
         default=300,
         metavar="SECONDS",
         help="Device response timeout in seconds (default: 300 = 5 minutes). "
-             "If no data is received within this time, reconnection will be attempted.",
+        "If no data is received within this time, reconnection will be attempted.",
     )
 
     args = parser.parse_args()
@@ -1104,7 +1105,7 @@ Output format:
     # Validation
     if args.mqtt_auto_home_assistant and not args.mqtt:
         parser.error("--mqtt-auto-home-assistant requires --mqtt")
-    
+
     if args.timeout < 1:
         parser.error("--timeout must be at least 1 second")
 
